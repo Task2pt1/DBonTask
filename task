@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Keep-alive Exchange via the live Streamlit UI only (no Neo4j, no app-repo files).
-
-Pacific day/evening only. Nonlinear gaps under 12h so Community Cloud
-does not hibernate. Each visit is a small random burst of searches.
-"""
+"""Open the Streamlit app and click around like a person. No Add data / Submit."""
 
 from __future__ import annotations
 
@@ -18,10 +14,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 PT = ZoneInfo("America/Los_Angeles")
-STATE_PATH = Path(os.environ.get("ALIVE_STATE", ".keepalive-state.json"))
+STATE_PATH = Path(os.environ.get("KEEPALIVE_STATE", ".keepalive-state.json"))
 DEFAULT_APP_URL = "https://test-database-nrcan.streamlit.app/"
 
-# Stay under the 12h sleep. Typical gap ~4.5h, never more than 10h.
 MEDIAN_HOURS = float(os.environ.get("KEEPALIVE_MEDIAN_HOURS", "4.5"))
 SIGMA = float(os.environ.get("KEEPALIVE_SIGMA", "0.35"))
 MIN_HOURS = float(os.environ.get("KEEPALIVE_MIN_HOURS", "3"))
@@ -29,21 +24,21 @@ MAX_HOURS = float(os.environ.get("KEEPALIVE_MAX_HOURS", "10"))
 SLEEP_MIN_S = float(os.environ.get("KEEPALIVE_SLEEP_MIN_S", "12"))
 SLEEP_MAX_S = float(os.environ.get("KEEPALIVE_SLEEP_MAX_S", "87"))
 NAV_TIMEOUT_MS = int(os.environ.get("KEEPALIVE_NAV_TIMEOUT_MS", "180000"))
-WINDOW_START = (8, 0)    # 08:00 PT
-WINDOW_END = (21, 30)    # 21:30 PT
-BURST_MIN = 2
-BURST_MAX = 5
-SEARCH_TERMS = (
-    "steel",
-    "wood",
-    "metal",
-    "glass",
-    "cement",
-    "insulation",
-    "polymer",
-    "roof",
-    "tile",
-    "masonry",
+WINDOW_START = (8, 0)
+WINDOW_END = (21, 30)
+
+AVOID = re.compile(
+    r"submit|upload|add data|clear bill|clear compare|delete|sign in",
+    re.I,
+)
+CATEGORIES = (
+    "Metal",
+    "Wood",
+    "Insulation",
+    "Masonry",
+    "Polymers",
+    "Roofing",
+    "Tile",
 )
 
 
@@ -71,7 +66,6 @@ def next_morning(after: datetime) -> datetime:
 
 def next_interval(from_when: datetime) -> datetime:
     hours = random.lognormvariate(math.log(MEDIAN_HOURS), SIGMA)
-    # weekly sine: some days tighter, some looser (still clamped)
     warp = 0.85 + 0.30 * math.sin(
         (from_when.timetuple().tm_yday + from_when.hour / 24.0) / 7.0 * 2.0 * math.pi
     )
@@ -79,7 +73,6 @@ def next_interval(from_when: datetime) -> datetime:
     nxt = from_when + timedelta(hours=hours, minutes=random.uniform(3, 41))
     if not in_window(nxt):
         nxt = next_morning(from_when)
-    # overnight from last burst to morning must stay < 12h
     if (nxt - from_when) > timedelta(hours=11):
         eve = from_when.replace(hour=19, minute=0, second=0, microsecond=0)
         eve += timedelta(minutes=random.uniform(10, 100))
@@ -101,75 +94,77 @@ def save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=2) + "\n")
 
 
-def wait_for_streamlit(page) -> None:
-    page.locator('[data-testid="stAppViewContainer"]').wait_for(
+def app_root(page):
+    if page.locator("iframe").count():
+        return page.frame_locator("iframe").first
+    return page
+
+
+def wait_for_streamlit(page):
+    root = app_root(page)
+    root.locator('[data-testid="stAppViewContainer"]').wait_for(
         timeout=NAV_TIMEOUT_MS
     )
+    return root
 
 
-def click_button(page, pattern: str) -> bool:
-    rx = re.compile(pattern, re.I)
-    btn = page.get_by_role("button", name=rx)
-    if btn.count() == 0:
-        btn = page.get_by_text(rx)
-    if btn.count() == 0:
-        return False
-    btn.first.click()
-    page.wait_for_timeout(2000)
-    return True
+def wander(root, page, n_clicks: int = 4) -> str:
+    notes = []
+    cat = root.get_by_label(re.compile(r"main category", re.I))
+    if cat.count():
+        pick = random.choice(CATEGORIES)
+        cat.first.click()
+        root.get_by_text(pick, exact=True).first.click()
+        notes.append(f"category={pick}")
+        page.wait_for_timeout(1500)
 
+    buttons = root.get_by_role("button")
+    found = []
+    for i in range(min(buttons.count(), 50)):
+        el = buttons.nth(i)
+        try:
+            if not el.is_visible():
+                continue
+            name = (el.inner_text() or "").strip()
+            if not name or AVOID.search(name):
+                continue
+            found.append((name[:80], el))
+        except Exception:
+            continue
 
-def visible_text(page) -> str:
-    return page.locator('[data-testid="stAppViewContainer"]').inner_text()[:4000]
-
-
-def run_read_node(page, term: str) -> str:
-    search = page.get_by_placeholder(re.compile(r"press enter to submit form", re.I))
-    if search.count() == 0:
-        search = page.get_by_role("textbox").first
-    else:
-        search = search.first
-    search.click()
-    search.fill(term)
-    if not click_button(page, r"^search$"):
-        search.press("Enter")
-    page.wait_for_timeout(2500)
-    match = page.get_by_text(re.compile(r"match\(es\) for", re.I))
-    if match.count():
-        hits = page.get_by_role("button").filter(
-            has_not_text=re.compile(
-                r"search|add data|clear|user participation|compare|export",
-                re.I,
-            )
-        )
-        if hits.count():
-            hits.first.click()
-            page.wait_for_timeout(2000)
-    return f"query term={term}\n{visible_text(page)}"
+    random.shuffle(found)
+    for name, el in found[:n_clicks]:
+        box = el.bounding_box()
+        if not box:
+            continue
+        x = box["x"] + box["width"] * random.uniform(0.3, 0.7)
+        y = box["y"] + box["height"] * random.uniform(0.3, 0.7)
+        page.mouse.move(x, y, steps=random.randint(6, 14))
+        page.mouse.click(x, y, delay=random.randint(40, 120))
+        page.wait_for_timeout(random.randint(600, 1800))
+        notes.append(f"click={name}")
+    return "wander\n" + "\n".join(notes)
 
 
 def run_burst(app_url: str, dry: bool) -> str:
-    n = random.randint(BURST_MIN, BURST_MAX)
-    terms = random.sample(SEARCH_TERMS, k=min(n, len(SEARCH_TERMS)))
+    n = random.randint(3, 6)
     if dry:
-        return f"dry-run burst n={n} terms={terms}"
+        return f"dry-run wander clicks={n}"
 
     from playwright.sync_api import sync_playwright
 
-    chunks = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(app_url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-        wait_for_streamlit(page)
-        for i, term in enumerate(terms):
-            chunks.append(run_read_node(page, term))
-            if i < len(terms) - 1:
-                # nonlinear pause between queries in the cluster (~8–40s)
-                pause = min(48.0, max(7.0, random.lognormvariate(math.log(18), 0.45)))
-                time.sleep(pause)
+        print("url", page.url)
+        print("title", page.title())
+        print("iframes", page.locator("iframe").count())
+        print("snippet", page.inner_text("body")[:500])
+        root = wait_for_streamlit(page)
+        text = wander(root, page, n_clicks=n)
         browser.close()
-    return f"burst n={len(terms)}\n" + "\n---\n".join(chunks)
+    return text
 
 
 def main() -> None:
