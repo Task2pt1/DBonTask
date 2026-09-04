@@ -23,7 +23,7 @@ jobs:
 
       - name: Install
         run: |
-          pip install -r requirement.txt
+          pip install -r requirement
           python -m playwright install --with-deps chromium
 
       - name: Restore last ping state
