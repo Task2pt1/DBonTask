@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep-alive via the live Streamlit UI only (no Neo4j, no app-repo files).
+"""Keep-alive Exchange via the live Streamlit UI only (no Neo4j, no app-repo files).
 
 Pacific day/evening only. Nonlinear gaps under 12h so Community Cloud
 does not hibernate. Each visit is a small random burst of searches.
@@ -18,7 +18,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 PT = ZoneInfo("America/Los_Angeles")
-STATE_PATH = Path(os.environ.get("KEEPALIVE_STATE", ".keepalive-state.json"))
+STATE_PATH = Path(os.environ.get("ALIVE_STATE", ".keepalive-state.json"))
 DEFAULT_APP_URL = "https://test-database-nrcan.streamlit.app/"
 
 # Stay under the 12h sleep. Typical gap ~4.5h, never more than 10h.
