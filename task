@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Standalone keep-alive: drive the live Streamlit app in a browser.
+
+Does not live in the Streamlit GitHub repo and does not talk to Neo4j
+directly. Cycles two UI tasks:
+  - read_node: retrieve something from the graph via the app (chat / query)
+ 
+
+Default app: https://test-database-nrcan.streamlit.app/
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import random
+import re
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+STATE_PATH = Path(os.environ.get("KEEPALIVE_STATE", ".keepalive-state.json"))
+
+DEFAULT_APP_URL = "https://test-database-nrcan.streamlit.app/"
+MEDIAN_HOURS = float(os.environ.get("KEEPALIVE_MEDIAN_HOURS", "48"))
+SIGMA = float(os.environ.get("KEEPALIVE_SIGMA", "0.32"))
+MIN_HOURS = float(os.environ.get("KEEPALIVE_MIN_HOURS", "30"))
+MAX_HOURS = float(os.environ.get("KEEPALIVE_MAX_HOURS", "70"))
+SLEEP_MIN_S = float(os.environ.get("KEEPALIVE_SLEEP_MIN_S", "12"))
+SLEEP_MAX_S = float(os.environ.get("KEEPALIVE_SLEEP_MAX_S", "87"))
+NAV_TIMEOUT_MS = int(os.environ.get("KEEPALIVE_NAV_TIMEOUT_MS", "180000"))
+SEARCH_TERMS = (
+    "steel",
+    "wood",
+    "metal",
+    "glass",
+    "cement",
+    "insulation",
+    "polymer",
+    "roof",
+    "tile",
+    "masonry",
+)
+TASKS = ("read_node")
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def next_interval() -> timedelta:
+    hours = random.lognormvariate(math.log(MEDIAN_HOURS), SIGMA)
+    now = utcnow()
+    day_frac = now.timetuple().tm_yday + now.hour / 24.0
+    warp = 0.85 + 0.30 * math.sin(day_frac / 7.0 * 2.0 * math.pi)
+    hours = min(MAX_HOURS, max(MIN_HOURS, hours * warp))
+    extra_minutes = random.uniform(3, 51)
+    return timedelta(hours=hours, minutes=extra_minutes)
+
+
+def load_state() -> dict:
+    if not STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def save_state(state: dict) -> None:
+    STATE_PATH.write_text(json.dumps(state, indent=2) + "\n")
+
+
+def pick_task(state: dict) -> str:
+    forced = os.environ.get("KEEPALIVE_TASK", "").strip()
+    if forced in TASKS:
+        return forced
+    last = state.get("last_task")
+    if last in TASKS:
+        return TASKS[(TASKS.index(last) + 1) % len(TASKS)]
+    return random.choice(TASKS)
+
+
+def wait_for_streamlit(page) -> None:
+    page.locator('[data-testid="stAppViewContainer"]').wait_for(
+        timeout=NAV_TIMEOUT_MS
+    )
+
+
+def click_button(page, pattern: str) -> bool:
+    rx = re.compile(pattern, re.I)
+    btn = page.get_by_role("button", name=rx)
+    if btn.count() == 0:
+        btn = page.get_by_text(rx)
+    if btn.count() == 0:
+        return False
+    btn.first.click()
+    page.wait_for_timeout(2000)
+    return True
+
+
+def visible_text(page) -> str:
+    return page.locator('[data-testid="stAppViewContainer"]').inner_text()[:4000]
+
+
+def run_read_node(page, term: str) -> str:
+    search = page.get_by_placeholder(re.compile(r"press enter to submit form", re.I))
+    if search.count() == 0:
+        search = page.get_by_role("textbox").first
+    else:
+        search = search.first
+    search.click()
+    search.fill(term)
+    if not click_button(page, r"^search$"):
+        search.press("Enter")
+    page.wait_for_timeout(2500)
+    match = page.get_by_text(re.compile(r"match\(es\) for", re.I))
+    if match.count():
+        # first clickable hit under Navigation (skip the count line)
+        hits = page.get_by_role("button").filter(
+            has_not_text=re.compile(
+                r"search|add data|clear|user participation|compare|export",
+                re.I,
+            )
+        )
+        if hits.count():
+            hits.first.click()
+            page.wait_for_timeout(2000)
+    return f"task=read_node term={term}\n{visible_text(page)}"
+
+
+def main() -> None:
+    app_url = os.environ.get("APP_URL", "").strip() or DEFAULT_APP_URL
+    force = os.environ.get("KEEPALIVE_FORCE", "").lower() in {"1", "true", "yes"}
+    dry = os.environ.get("KEEPALIVE_DRY_RUN", "").lower() in {"1", "true", "yes"}
+    term = os.environ.get("STREAMLIT_SEARCH", "").strip() or random.choice(
+        SEARCH_TERMS
+    )
+
+    now = utcnow()
+    state = load_state()
+    due_raw = state.get("next_due")
+    due = datetime.fromisoformat(due_raw) if due_raw else None
+
+    if not force and due is not None and now < due:
+        print(f"skip until {due.isoformat()}")
+        return
+
+    task = pick_task(state)
+    delay = random.uniform(SLEEP_MIN_S, SLEEP_MAX_S)
+    print(f"task {task}; jitter sleep {delay:.1f}s")
+    if not dry:
+        time.sleep(delay)
+
+    result = run_via_streamlit(app_url, task, term, dry=dry)
+    print(result)
+
+    nxt = now + next_interval()
+    state = {
+        "last_ping": now.isoformat(),
+        "last_task": task,
+        "next_due": nxt.isoformat(),
+        "interval_hours": round((nxt - now).total_seconds() / 3600, 2),
+    }
+    save_state(state)
+    print(f"next due {nxt.isoformat()} ({state['interval_hours']}h)")
+
+
+if __name__ == "__main__":
+    main()
