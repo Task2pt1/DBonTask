@@ -9,7 +9,7 @@ on:
         description: "Open the Streamlit app now"
         type: boolean
         default: false
-
+pip install -r requirement
 jobs:
   ping:
     runs-on: ubuntu-latest
@@ -39,7 +39,7 @@ jobs:
           APP_URL: ${{ secrets.APP_URL }}
           STREAMLIT_SEARCH: ${{ secrets.STREAMLIT_SEARCH }}
           KEEPALIVE_FORCE: ${{ github.event.inputs.force }}
-        run: python task.py
+        run: python task
 
       - name: Save next-due state
         if: always()
