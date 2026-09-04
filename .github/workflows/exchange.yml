@@ -9,7 +9,7 @@ on:
         description: "Open the Streamlit app now"
         type: boolean
         default: false
-pip install -r requirement
+
 jobs:
   ping:
     runs-on: ubuntu-latest
