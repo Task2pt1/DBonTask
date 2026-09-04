@@ -2,7 +2,9 @@ name: exchange
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "17 15 * * *"
+    - cron: "17 23 * * *"
+    - cron: "17 4 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -11,21 +13,71 @@ on:
         default: false
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: .keepalive-state.json
+          key: keepalive-${{ github.run_id }}
+          restore-keys: |
+            keepalive-
+      - id: check
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timedelta
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+          PT = ZoneInfo("America/Los_Angeles")
+          now = datetime.now(PT)
+          force = os.environ.get("KEEPALIVE_FORCE", "").lower() in {"1", "true", "yes"}
+          go = "true"
+          if force:
+              pass
+          elif not (8 * 60 <= now.hour * 60 + now.minute <= 21 * 60 + 30):
+              go = "false"
+          else:
+              p = Path(".keepalive-state.json")
+              state = json.loads(p.read_text()) if p.exists() else {}
+              due = state.get("next_due")
+              last = state.get("last_ping")
+              if due:
+                  d = datetime.fromisoformat(due)
+                  if d.tzinfo is None:
+                      d = d.replace(tzinfo=PT)
+                  stale = True
+                  if last:
+                      l = datetime.fromisoformat(last)
+                      if l.tzinfo is None:
+                          l = l.replace(tzinfo=PT)
+                      stale = (now - l) >= timedelta(hours=10)
+                  if now < d and not stale:
+                      go = "false"
+          print(f"go={go} now={now.isoformat()}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"go={go}\n")
+          PY
+        env:
+          KEEPALIVE_FORCE: ${{ github.event.inputs.force }}
+
   ping:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install
         run: |
           pip install -r requirement
           python -m playwright install --with-deps chromium
-
       - name: Restore last ping state
         uses: actions/cache/restore@v4
         with:
@@ -33,14 +85,12 @@ jobs:
           key: keepalive-${{ github.run_id }}
           restore-keys: |
             keepalive-
-
       - name: Use Streamlit (browser)
         env:
           APP_URL: ${{ secrets.APP_URL }}
           STREAMLIT_SEARCH: ${{ secrets.STREAMLIT_SEARCH }}
           KEEPALIVE_FORCE: ${{ github.event.inputs.force }}
         run: python task
-
       - name: Save next-due state
         if: always()
         uses: actions/cache/save@v4
