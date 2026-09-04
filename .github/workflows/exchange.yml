@@ -23,7 +23,7 @@ jobs:
 
       - name: Install
         run: |
-          pip install -r requirements.txt
+          pip install -r requirement.txt
           python -m playwright install --with-deps chromium
 
       - name: Restore last ping state
@@ -39,7 +39,7 @@ jobs:
           APP_URL: ${{ secrets.APP_URL }}
           STREAMLIT_SEARCH: ${{ secrets.STREAMLIT_SEARCH }}
           KEEPALIVE_FORCE: ${{ github.event.inputs.force }}
-        run: python keepalive.py
+        run: python task.py
 
       - name: Save next-due state
         if: always()
