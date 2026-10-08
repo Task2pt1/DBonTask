@@ -23,7 +23,7 @@ MIN_HOURS = float(os.environ.get("KEEPALIVE_MIN_HOURS", "3"))
 MAX_HOURS = float(os.environ.get("KEEPALIVE_MAX_HOURS", "10"))
 SLEEP_MIN_S = float(os.environ.get("KEEPALIVE_SLEEP_MIN_S", "12"))
 SLEEP_MAX_S = float(os.environ.get("KEEPALIVE_SLEEP_MAX_S", "87"))
-NAV_TIMEOUT_MS = int(os.environ.get("KEEPALIVE_NAV_TIMEOUT_MS", "180000"))
+NAV_TIMEOUT_MS = int(os.environ.get("KEEPALIVE_NAV_TIMEOUT_MS", "300000"))
 WINDOW_START = (8, 0)
 WINDOW_END = (21, 30)
 
